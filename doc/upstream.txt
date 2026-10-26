@@ -1,0 +1,109 @@
+*upstream.txt*  Full-screen GitHub UI on top of the gh CLI
+
+==============================================================================
+CONTENTS                                                    *upstream*
+
+  1. Introduction ........................... |upstream-intro|
+  2. Commands ............................... |upstream-commands|
+  3. Keys ................................... |upstream-keys|
+  4. Configuration .......................... |upstream-config|
+  5. Highlights ............................. |upstream-highlights|
+  6. Events ................................. |upstream-events|
+
+==============================================================================
+1. INTRODUCTION                                             *upstream-intro*
+
+upstream.nvim browses the current repository's issues, pull requests, review
+requests and CI runs in one full-screen float: a list on the left, the
+selected item (rendered as markdown) on the right.
+
+Requirements: Neovim >= 0.10, `gh` (authenticated) and `git`. Run
+|:checkhealth| `upstream` to verify them.
+
+Version 0.1 is read-only.
+
+==============================================================================
+2. COMMANDS                                              *upstream-commands*
+
+                                                                 *:Upstream*
+:Upstream [{tab}]       Open the float. {tab} is one of `issues`, `prs`,
+                        `reviews`, `actions`; without it the last tab is used.
+
+Lua API:
+>lua
+    require("upstream").open({ tab = "prs" })
+    require("upstream").close()
+    require("upstream").toggle()
+<
+==============================================================================
+3. KEYS                                                      *upstream-keys*
+
+In the list:
+
+  j k G             Move. Landing on "load more" fetches the next page.
+  <Tab> <S-Tab>     Next / previous tab.             keys.next_tab / prev_tab
+  1 2 3 4           Jump to a tab.
+  <CR>              Focus the detail pane.           keys.focus
+  <C-d> <C-u>       Scroll the detail pane.          keys.scroll_down / up
+  /                 Filter on title, #number,        keys.filter
+                    author, labels and branch.
+  s                 Cycle state: open, closed, all.  keys.state
+  r                 Refresh (bypasses the cache).    keys.refresh
+  gx                Open the item in the browser.    keys.browser
+  ?                 Help.                            keys.help
+  q                 Close.                           keys.close
+  <Esc>             Clear the filter, else close.
+
+In the detail pane: `<C-h>`, `q` or `<Esc>` return to the list.
+
+==============================================================================
+4. CONFIGURATION                                           *upstream-config*
+
+`setup()` is optional.
+>lua
+    require("upstream").setup({
+      timeout = 15000,   -- ms before a gh call is killed
+      per_page = 50,     -- items per page (max 100)
+      tab = "issues",    -- tab opened the first time
+      highlights = {},   -- { GroupName = hl-spec } (|nvim_set_hl()|)
+      keys = {           -- set a key to false to disable it
+        next_tab = "<Tab>", prev_tab = "<S-Tab>", filter = "/",
+        state = "s", refresh = "r", browser = "gx", focus = "<CR>",
+        back = "<C-h>", scroll_down = "<C-d>", scroll_up = "<C-u>",
+        help = "?", close = "q",
+      },
+    })
+<
+Responses are cached under `stdpath("cache")/upstream/<owner>/<repo>/` and
+served stale-while-revalidate: cached data draws at once and is redrawn when
+the refetch lands.
+
+==============================================================================
+5. HIGHLIGHTS                                           *upstream-highlights*
+
+All groups are default links, so a colorscheme or |:highlight| overrides them.
+
+  UpstreamNormal      NormalFloat      UpstreamOpen        DiagnosticOk
+  UpstreamBorder      FloatBorder      UpstreamClosed      DiagnosticError
+  UpstreamTitle       Function         UpstreamMerged      Constant
+  UpstreamMuted       Comment          UpstreamDraft       Comment
+  UpstreamAccent      Function         UpstreamPending     DiagnosticWarn
+  UpstreamTab         Comment          UpstreamLabel       Special
+  UpstreamTabActive   Function         UpstreamNumber      Number
+  UpstreamSel         CursorLine
+
+When `vim.g.ui_transparent` is true the float has no background.
+
+==============================================================================
+6. EVENTS                                                   *upstream-events*
+
+                                                           *UpstreamChanged*
+`User UpstreamChanged` fires (debounced) after fresh data lands. Its `data` is
+`{ repo = "owner/name", key = "issues-open" }`.
+>lua
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "UpstreamChanged",
+      callback = function(ev) print(ev.data.key) end,
+    })
+<
+ vim:tw=78:ts=8:ft=help:norl:

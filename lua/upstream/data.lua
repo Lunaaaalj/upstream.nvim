@@ -142,19 +142,23 @@ local function fetch_page(repo, tab, state, cursor, done)
       page(err, d and d.items)
     end)
   elseif tab == "actions" then
-    -- no workflow-run listing in GraphQL; `gh run list` has no cursor either,
-    -- so this tab is a single page
+    -- no workflow-run listing in GraphQL, and `gh run list` has no cursor:
+    -- the "cursor" is how many runs were already fetched, and the next page
+    -- asks for that many more and keeps only the new tail
+    local skip = tonumber(cursor) or 0
+    local limit = skip + n
     local fields = "databaseId,displayTitle,workflowName,status,conclusion,headBranch,event,createdAt,url"
-    local args = { "run", "list", "-R", repo.full, "-L", tostring(n), "--json", fields }
+    local args = { "run", "list", "-R", repo.full, "-L", tostring(limit), "--json", fields }
     -- "open" = not finished yet; gh takes only one --status, so filter here
     gh.json(args, function(err, runs)
       if err then return done(err) end
       local items = {}
-      for _, r in ipairs(runs or {}) do
+      for i, r in ipairs(runs or {}) do
         local it = run_item(r)
-        if state == "all" or (state == "open") == (it.state == "OPEN") then items[#items + 1] = it end
+        if i > skip and (state == "all" or (state == "open") == (it.state == "OPEN")) then items[#items + 1] = it end
       end
-      done(nil, { items = items, total = #items, has_next = false })
+      local full = #(runs or {}) >= limit
+      done(nil, { items = items, total = nil, has_next = full, cursor = full and tostring(limit) or nil })
     end)
   end
 end
@@ -218,22 +222,48 @@ local function detail_item(node)
   it.milestone = vim.tbl_get(node, "milestone", "title")
   it.timeline = timeline(node)
   it.timeline_total = vim.tbl_get(node, "timelineItems", "totalCount") or #it.timeline
+  it.id = node.id
   if it.kind == "pr" then
     it.additions, it.deletions, it.files = node.additions, node.deletions, node.changedFiles
+    it.head_oid = node.headRefOid
+    it.head_ref_id = vim.tbl_get(node, "headRef", "id")
+    it.cross_repo = node.isCrossRepository
     it.mergeable = node.mergeable
     it.approvals = vim.tbl_get(node, "approvals", "totalCount") or 0
     it.commit_count = vim.tbl_get(node, "commits", "totalCount")
     it.closes = vim.tbl_get(node, "closingIssuesReferences", "nodes") or {}
     it.reviewers = {}
     for _, r in ipairs(vim.tbl_get(node, "reviewRequests", "nodes") or {}) do
-      it.reviewers[#it.reviewers + 1] = login(r.requestedReviewer)
+      local rr = r.requestedReviewer or {}
+      it.reviewers[#it.reviewers + 1] = { name = login(rr), id = rr.id, team = rr.__typename == "Team" }
     end
   end
   return it
 end
 
--- detail(repo, kind, number, cb, force): cb(err, item, meta). Runs have no
--- detail query yet (logs are Phase 6); the list item is shown as-is.
+local function run_detail(repo, number, done)
+  local fields = "databaseId,displayTitle,workflowName,status,conclusion,headBranch,event,createdAt,url,jobs"
+  gh.json({ "run", "view", tostring(number), "-R", repo.full, "--json", fields }, function(err, r)
+    if err then return done(err) end
+    if type(r) ~= "table" or not r.databaseId then return done("run " .. number .. " not found") end
+    local it = run_item(r)
+    it.jobs = {}
+    for _, j in ipairs(r.jobs or {}) do
+      local steps = {}
+      for _, st in ipairs(j.steps or {}) do
+        steps[#steps + 1] = { name = st.name, status = st.status, conclusion = st.conclusion }
+      end
+      it.jobs[#it.jobs + 1] = {
+        name = j.name, status = j.status, conclusion = j.conclusion, id = j.databaseId,
+        started = j.startedAt, completed = j.completedAt, steps = steps,
+      }
+    end
+    done(nil, it)
+  end)
+end
+
+-- detail(repo, kind, number, cb, force): cb(err, item, meta). Runs come from
+-- `gh run view` (jobs and steps); issues and PRs from GraphQL.
 function M.detail(repo, kind, number, cb, force)
   local key = kind .. "-" .. number
   if not force then
@@ -241,6 +271,7 @@ function M.detail(repo, kind, number, cb, force)
     if c then cb(nil, c, { stale = true }) end
   end
   once(repo.full .. ":" .. key, function(done)
+    if kind == "run" then return run_detail(repo, number, done) end
     gh.graphql(queries[kind], { owner = repo.owner, name = repo.name, number = number }, function(err, d)
       if err then return done(err) end
       local it = detail_item(d and vim.tbl_get(d, "repository", "item"))
@@ -255,6 +286,71 @@ function M.detail(repo, kind, number, cb, force)
     cache.write(repo, key, it)
     cb(nil, it, { stale = false })
     changed(repo, key)
+  end)
+end
+
+-- apply(repo, node): a mutation's returned issue/PR node → normalised item,
+-- written to the detail cache. Fires `User UpstreamChanged` straight away
+-- (not debounced) with `data.item`, which the float uses to patch its lists.
+function M.apply(repo, node)
+  local it = detail_item(node)
+  if not it then return nil end
+  cache.write(repo, it.kind .. "-" .. it.number, it)
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "UpstreamChanged",
+    modeline = false,
+    data = { repo = repo.full, key = it.kind .. "-" .. it.number, item = it },
+  })
+  return it
+end
+
+-- mutate(repo, query, vars, path, cb, quiet): run a mutation, dig the
+-- issue/PR node out of the payload at `path` (e.g. { "addComment", "subject" })
+-- and apply it. cb(err, item). Errors are notified (a write failing silently
+-- is worse than a noisy one) unless `quiet`: compose buffers report their own,
+-- with the draft's path.
+function M.mutate(repo, query, vars, path, cb, quiet)
+  cb = cb or function() end
+  gh.graphql(query, vars, function(err, d)
+    if err then
+      if not quiet then vim.notify("upstream: " .. err, vim.log.levels.ERROR) end
+      return cb(err)
+    end
+    local node = path and vim.tbl_get(d or {}, unpack(path))
+    cb(nil, node and M.apply(repo, node) or nil, d)
+  end)
+end
+
+-- events for things that aren't an issue/PR node (threads, runs, branches)
+function M.touch(repo, key) changed(repo, key) end
+
+-- meta(repo, cb, force): labels / assignable users / milestones / repo id /
+-- viewer login, kept in memory for a few minutes.
+local metas = {}
+local META_TTL = 300
+function M.meta(repo, cb, force)
+  local m = metas[repo.full]
+  if m and not force and os.time() - m.at < META_TTL then return cb(nil, m) end
+  once(repo.full .. ":meta", function(done)
+    gh.graphql(queries.meta, { owner = repo.owner, name = repo.name }, function(err, d)
+      if err then return done(err) end
+      local r = d and d.repository or {}
+      done(nil, {
+        at = os.time(),
+        id = r.id,
+        viewer = vim.tbl_get(d, "viewer", "login"),
+        labels = vim.tbl_get(r, "labels", "nodes") or {},
+        users = vim.tbl_get(r, "assignableUsers", "nodes") or {},
+        milestones = vim.tbl_get(r, "milestones", "nodes") or {},
+      })
+    end)
+  end, function(err, meta)
+    if err then
+      vim.notify("upstream: " .. err, vim.log.levels.ERROR)
+      return cb(err)
+    end
+    metas[repo.full] = meta
+    cb(nil, meta)
   end)
 end
 

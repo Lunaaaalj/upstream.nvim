@@ -23,6 +23,7 @@ function M.run(args, cb, opts)
     text = true,
     timeout = opts.timeout or config.options.timeout,
     cwd = opts.cwd,
+    stdin = opts.stdin,
     env = { GH_PROMPT_DISABLED = "1", NO_COLOR = "1" },
   }, vim.schedule_wrap(function(res)
     if res.code == 0 then return cb(nil, res.stdout or "") end
@@ -46,22 +47,14 @@ function M.json(args, cb, opts)
 end
 
 -- graphql(query, { owner = "o", n = 50 }, function(err, data) end)
--- Strings go through -f (raw) so values like "123" stay strings; numbers and
--- booleans go through -F so GraphQL gets typed values. nil vars are omitted,
--- which GraphQL treats as null (handy for `after: $cursor`).
+-- The request goes as a JSON body on stdin (`--input -`), so variables keep
+-- their JSON types: strings stay strings, `{}` is an empty list (clearing all
+-- labels needs `labelIds: []`, which `-f key[]=` cannot express), and nil
+-- vars are simply absent, which GraphQL treats as null.
 function M.graphql(query, vars, cb, opts)
-  local args = { "api", "graphql", "-f", "query=" .. query }
-  for k, v in pairs(vars or {}) do
-    if type(v) == "table" then
-      -- lists use gh's `key[]=value` syntax, one flag per element
-      for _, x in ipairs(v) do vim.list_extend(args, { "-f", k .. "[]=" .. tostring(x) }) end
-    elseif type(v) == "string" then
-      vim.list_extend(args, { "-f", k .. "=" .. v })
-    else
-      vim.list_extend(args, { "-F", k .. "=" .. tostring(v) })
-    end
-  end
-  M.run(args, function(err, stdout)
+  local body = vim.json.encode({ query = query, variables = vim.tbl_isempty(vars or {}) and vim.empty_dict() or vars })
+  opts = vim.tbl_extend("force", opts or {}, { stdin = body })
+  M.run({ "api", "graphql", "--method", "POST", "--input", "-" }, function(err, stdout)
     -- `gh api` exits non-zero on GraphQL errors but still prints the JSON
     -- body on stdout, whose message beats gh's generic stderr
     local ok, out = pcall(vim.json.decode, stdout or "", { luanil = { object = true, array = true } })

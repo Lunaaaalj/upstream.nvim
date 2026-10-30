@@ -6,21 +6,29 @@ CONTENTS                                                    *upstream*
   1. Introduction ........................... |upstream-intro|
   2. Commands ............................... |upstream-commands|
   3. Keys ................................... |upstream-keys|
-  4. Configuration .......................... |upstream-config|
-  5. Highlights ............................. |upstream-highlights|
-  6. Events ................................. |upstream-events|
+  4. Compose buffers ........................ |upstream-compose|
+  5. Review ................................. |upstream-review|
+  6. AI assistance .......................... |upstream-ai|
+  7. Actions (CI runs) ...................... |upstream-actions|
+  8. Configuration .......................... |upstream-config|
+  9. Highlights ............................. |upstream-highlights|
+ 10. Events ................................. |upstream-events|
 
 ==============================================================================
 1. INTRODUCTION                                             *upstream-intro*
 
-upstream.nvim browses the current repository's issues, pull requests, review
-requests and CI runs in one full-screen float: a list on the left, the
-selected item (rendered as markdown) on the right.
+upstream.nvim works with the current repository's issues, pull requests,
+review requests and CI runs in one full-screen float: a list on the left, the
+selected item (rendered as markdown) on the right. You can comment, edit,
+label, assign, merge and check out from it, review pull requests in a diff
+with inline threads, and have Claude draft PR descriptions and review
+comments.
 
-Requirements: Neovim >= 0.10, `gh` (authenticated) and `git`. Run
-|:checkhealth| `upstream` to verify them.
+Requirements: Neovim >= 0.10, `gh` (authenticated) and `git`. The AI features
+also need Claude Code (`claude`). Run |:checkhealth| `upstream` to verify them.
 
-Version 0.1 is read-only.
+Nothing is posted to GitHub without a |:w| in a compose buffer or an explicit
+confirmation.
 
 ==============================================================================
 2. COMMANDS                                              *upstream-commands*
@@ -28,58 +36,224 @@ Version 0.1 is read-only.
                                                                  *:Upstream*
 :Upstream [{tab}]       Open the float. {tab} is one of `issues`, `prs`,
                         `reviews`, `actions`; without it the last tab is used.
+:Upstream new-issue     Compose a new issue.
+:Upstream new-pr        Compose a PR from the current branch.
+:Upstream draft-pr      Same, with Claude drafting the title and body.
+:Upstream review {n} [assist]
+                        Review PR {n}; `assist` also runs the AI review.
 
 Lua API:
 >lua
     require("upstream").open({ tab = "prs" })
     require("upstream").close()
     require("upstream").toggle()
+    require("upstream").new_issue()
+    require("upstream").new_pr({ ai = true })
+    require("upstream").review(42, { assist = true })
 <
 ==============================================================================
 3. KEYS                                                      *upstream-keys*
 
-In the list:
+In the list (the `keys` option names are on the right):
 
   j k G             Move. Landing on "load more" fetches the next page.
-  <Tab> <S-Tab>     Next / previous tab.             keys.next_tab / prev_tab
+  <Tab> <S-Tab>     Next / previous tab.             next_tab / prev_tab
   1 2 3 4           Jump to a tab.
-  <CR>              Focus the detail pane.           keys.focus
-  <C-d> <C-u>       Scroll the detail pane.          keys.scroll_down / up
-  /                 Filter on title, #number,        keys.filter
+  <CR>              Focus the detail pane.           focus
+  <C-d> <C-u>       Scroll the detail pane.          scroll_down / up
+  /                 Filter on title, #number,        filter
                     author, labels and branch.
-  s                 Cycle state: open, closed, all.  keys.state
-  r                 Refresh (bypasses the cache).    keys.refresh
-  gx                Open the item in the browser.    keys.browser
-  ?                 Help.                            keys.help
-  q                 Close.                           keys.close
+  s                 Cycle state: open, closed, all.  state
+  r                 Refresh (bypasses the cache).    refresh
+  gx                Open the item in the browser.    browser
+  ?                 Help.                            help
+  q                 Close.                           close
   <Esc>             Clear the filter, else close.
 
-In the detail pane: `<C-h>`, `q` or `<Esc>` return to the list.
+Manage (issues and PRs):
+
+  c                 Comment.                         comment
+  e                 Edit the title and body          edit
+                    (PRs: and the base branch).
+  x                 Close / reopen (confirms).       toggle_state
+  l                 Labels (picker).                 labels
+  a                 Assignees (picker).              assignees
+  M                 Milestone (picker).              milestone
+  v                 Request reviewers (PR).          reviewers
+  m                 Merge (PR): merge commit,        merge
+                    squash or rebase, then offers
+                    to delete the branch. On a
+                    draft it offers "ready for
+                    review"; on a merged PR it
+                    offers the branch deletion.
+  o                 Check out the PR branch          checkout
+                    (`gh pr checkout`, confirms).
+  R                 Review the PR (|upstream-review|). review
+  n                 New issue (Issues tab) or new    new
+                    PR (PR tabs).
+  A                 AI menu (|upstream-ai|).         ai
+
+On a CI run: `L` log, `R` re-run, `x` cancel (|upstream-actions|).
+
+In the detail pane: `<C-h>`, `q` or `<Esc>` return to the list. `c x a m o R A`
+and `gx` work there too; the other manage keys are list-only so that motions
+like `e`, `l`, `v` and search with `n` keep working while you read.
+
+Pickers (labels, assignees, reviewers): `<Space>` or `<Tab>` toggles, `<CR>`
+applies, `q` cancels. Use `/` to search in them.
 
 ==============================================================================
-4. CONFIGURATION                                           *upstream-config*
+4. COMPOSE BUFFERS                                        *upstream-compose*
+
+Comments, edits, new issues, new PRs and review bodies open in a markdown
+buffer with 'buftype' "acwrite". |:w| submits it; `:q` on an unsent buffer is
+protected like any modified buffer. Where it opens is the `compose` option.
+
+Metadata goes in a header block that ends with a `---` line:
+>
+    title: feat(github): browse issues
+    base: main   head: feat/x   draft: false
+    labels: enhancement, area:ui
+    assignees: octocat
+
+    ---
+    body…
+<
+Pairs on one line are separated by two or more spaces; `title:` always takes
+the rest of its line. Lists are comma-separated, names are matched without
+case. Unknown labels, users or milestones are reported before anything is
+sent.
+
+Each |:w| first saves the text under `stdpath("cache")/upstream/drafts/`. If
+the submit fails (or you `:wq` and it fails later), the buffer is marked
+modified again and the draft stays on disk; opening the same compose buffer
+restores it. A successful submit deletes the draft and closes the buffer.
+
+New PR: when the branch has no upstream or is ahead of it, you're asked
+before it is pushed (`git push -u origin <branch>`).
+
+==============================================================================
+5. REVIEW                                                  *upstream-review*
+
+`R` on a PR opens a tab with the `base...head` diff (`gh pr diff`) as one
+unified buffer: a header per file, hunk headers, old/new line numbers, and
+the existing review threads drawn as virtual lines under their line.
+Resolved threads are collapsed to one line; outdated threads aren't anchored
+and are listed by `T`.
+
+Your comments go into a pending review (started on the first comment) and
+are only published when you submit it.
+
+  c                 Comment on the line. In visual mode: a multi-line
+                    comment (the range must stay within one hunk). On a
+                    file header: a comment on the whole file.
+  r                 Reply to the thread on the line.
+  x                 Resolve / unresolve the thread on the line.
+  K                 Read the thread(s) on the line in a float.
+  ]t [t             Next / previous thread.
+  ]f [f             Next / previous file.
+  T                 All threads, outdated ones included.
+  S                 Submit: comment, approve or request changes, with an
+                    optional body in a compose buffer.
+  D                 Discard the pending review.
+  A                 AI review assist (|upstream-ai|).
+  gd                The AI drafts list.
+  gf                Open the file at this line (local checkout).
+  R                 Reload.
+  gx                Open the PR's files in the browser.
+  q                 Close the review tab.
+
+GitHub only accepts comments on lines inside a hunk: `+` and context lines
+anchor on the new file (RIGHT), `-` lines on the old one (LEFT). This is
+checked before anything is sent.
+
+==============================================================================
+6. AI ASSISTANCE                                               *upstream-ai*
+
+Claude Code runs headless (`claude -p --output-format json`, prompt on stdin)
+and only produces drafts. `A` in the float opens a menu with what applies to
+the selected item:
+
+Draft a PR ~
+  Collects `git log <base>..HEAD` and the diff against `origin/<base>`
+  (large files are truncated, the rest falls back to `--stat`) and asks for
+  `{title, body}`. The result opens in the new-PR compose buffer.
+  Also `:Upstream draft-pr`.
+
+Review assist ~
+  Sends the PR's title, description, linked issues and diff (each line
+  tagged with its anchor, like `R42` or `L17`) and asks for findings
+  `[{path, line, side, start_line?, severity, body}]`. Each one is checked
+  against the hunks: a bad range falls back to its last line, a bad line in
+  a file of the diff becomes a file-level comment, anything else is
+  dropped. The findings appear in the diff and in a drafts list:
+
+    a               Accept: add it to your pending review.
+    e               Edit it in a compose buffer, then add it.
+    d               Drop it.
+    <CR>            Show it in the diff.
+    K               Read it in full.
+
+  Submitting the review is still a separate `S`.
+
+Work on this issue ~
+  Offers to `git switch -c <number>-<slug>` first, then starts an
+  interactive chat seeded with the issue's title, body and comments. The
+  chat is opened by `ai.open_chat(prompt, ctx)`; by default that's
+  `:tabnew` + `:terminal claude <prompt>`.
+
+==============================================================================
+7. ACTIONS (CI RUNS)                                      *upstream-actions*
+
+The Actions tab lists workflow runs (`gh run list`, paginated by "load
+more"). The detail pane shows the run's jobs and steps.
+
+  L                 Open the log in a tab. A failed run shows only the
+                    failed steps; `a` there loads the whole log. `]]` / `[[`
+                    move between steps, and the cursor starts on the first
+                    error.
+  R                 Re-run (failed jobs or all, confirms).
+  x                 Cancel a run in progress (confirms).
+
+==============================================================================
+8. CONFIGURATION                                           *upstream-config*
 
 `setup()` is optional.
 >lua
     require("upstream").setup({
-      timeout = 15000,   -- ms before a gh call is killed
-      per_page = 50,     -- items per page (max 100)
-      tab = "issues",    -- tab opened the first time
-      highlights = {},   -- { GroupName = hl-spec } (|nvim_set_hl()|)
-      keys = {           -- set a key to false to disable it
+      timeout = 15000,     -- ms before a gh call is killed
+      per_page = 50,       -- items per page (max 100)
+      tab = "issues",      -- tab opened the first time
+      compose = "current", -- compose buffers: "current", "split",
+                           -- "vsplit" or "tab" (review always splits)
+      highlights = {},     -- { GroupName = hl-spec } (|nvim_set_hl()|)
+      keys = {             -- set a key to false to disable it
         next_tab = "<Tab>", prev_tab = "<S-Tab>", filter = "/",
         state = "s", refresh = "r", browser = "gx", focus = "<CR>",
         back = "<C-h>", scroll_down = "<C-d>", scroll_up = "<C-u>",
         help = "?", close = "q",
+        comment = "c", edit = "e", toggle_state = "x", labels = "l",
+        assignees = "a", reviewers = "v", milestone = "M", merge = "m",
+        checkout = "o", new = "n", review = "R", ai = "A", logs = "L",
+      },
+      ai = {
+        command = "claude",  -- Claude Code CLI
+        args = {},           -- extra args, e.g. { "--model", "sonnet" }
+        timeout = 300000,    -- ms for a headless run
+        max_findings = 15,   -- review assist upper bound
+        -- function(prompt, ctx) that opens an interactive chat;
+        -- ctx = { repo, number, kind, title, url }
+        open_chat = nil,
       },
     })
 <
 Responses are cached under `stdpath("cache")/upstream/<owner>/<repo>/` and
 served stale-while-revalidate: cached data draws at once and is redrawn when
-the refetch lands.
+the refetch lands. Writes are GraphQL mutations that return the updated
+item, which goes straight into the cache and the open float.
 
 ==============================================================================
-5. HIGHLIGHTS                                           *upstream-highlights*
+9. HIGHLIGHTS                                           *upstream-highlights*
 
 All groups are default links, so a colorscheme or |:highlight| overrides them.
 
@@ -90,16 +264,23 @@ All groups are default links, so a colorscheme or |:highlight| overrides them.
   UpstreamAccent      Function         UpstreamPending     DiagnosticWarn
   UpstreamTab         Comment          UpstreamLabel       Special
   UpstreamTabActive   Function         UpstreamNumber      Number
-  UpstreamSel         CursorLine
+  UpstreamSel         CursorLine       UpstreamDraftAI     DiagnosticHint
+
+Review diff:
+
+  UpstreamDiffAdd     DiffAdd          UpstreamDiffFile    Title
+  UpstreamDiffDelete  DiffDelete       UpstreamDiffHunk    Comment
+  UpstreamLineNr      LineNr
 
 When `vim.g.ui_transparent` is true the float has no background.
 
 ==============================================================================
-6. EVENTS                                                   *upstream-events*
+10. EVENTS                                                  *upstream-events*
 
                                                            *UpstreamChanged*
-`User UpstreamChanged` fires (debounced) after fresh data lands. Its `data` is
-`{ repo = "owner/name", key = "issues-open" }`.
+`User UpstreamChanged` fires after fresh data lands (debounced) and after
+every write. Its `data` is `{ repo = "owner/name", key = "issues-open" }`;
+after a write to an issue or PR it also has `item`, the updated item.
 >lua
     vim.api.nvim_create_autocmd("User", {
       pattern = "UpstreamChanged",

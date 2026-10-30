@@ -42,7 +42,7 @@ function M.check()
   if vim.fn.executable(ai) == 1 then
     h.ok(ai .. ": " .. (version({ ai, "--version" }) or "found"))
   else
-    h.warn(ai .. " not found", { "Only needed for the AI features (later phases)" })
+    h.warn(ai .. " not found", { "Needed only for AI drafts, review assist and work-on-issue" })
   end
 end
 

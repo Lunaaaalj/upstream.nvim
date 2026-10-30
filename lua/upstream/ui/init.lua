@@ -39,8 +39,10 @@ local function valid_win(w) return w ~= nil and vim.api.nvim_win_is_valid(w) end
 
 local function is_open() return valid_win(ui.frame) and valid_win(ui.list) end
 
+-- the float's own windows, plus overlays (pickers) that mark their buffer
 local function ours(win)
-  return win == ui.frame or win == ui.list or win == ui.detail or win == ui.input or win == ui.help
+  if win == ui.frame or win == ui.list or win == ui.detail or win == ui.input or win == ui.help then return true end
+  return vim.b[vim.api.nvim_win_get_buf(win)].upstream_overlay == true
 end
 
 local function scratch()
@@ -196,7 +198,7 @@ end
 local load_more
 
 local function fetch_detail(it)
-  if type(it) ~= "table" or it.kind == "run" then return end
+  if type(it) ~= "table" then return end
   local k, repo = key_of(it), ui.repo
   local fk = repo.full .. ":" .. k
   if fresh[fk] and os.time() - fresh[fk] < DETAIL_TTL then return end
@@ -224,7 +226,10 @@ local function on_cursor()
   v.sel_key = k
   if k == ui.want then return end
   ui.want = k
-  draw_detail(it.kind ~= "run" and require("upstream.cache").read(ui.repo, k) or it)
+  local cached = require("upstream.cache").read(ui.repo, k)
+  -- a run's list row can be newer than its cached detail (status changes)
+  if cached and it.kind == "run" and cached.status ~= it.status then cached = nil end
+  draw_detail(cached or it)
   ui.timer:stop()
   ui.timer:start(120, 0, vim.schedule_wrap(function()
     if ui.want == k then fetch_detail(it) end
@@ -329,6 +334,76 @@ local function selected()
   return type(it) == "table" and it or nil, it
 end
 
+-- The item the keys act on: the list row in the list, the shown item in the
+-- detail pane.
+local function current()
+  if vim.api.nvim_get_current_win() == ui.list then return (selected()) end
+  for _, x in ipairs(view().items) do
+    if key_of(x) == ui.shown_key then return x end
+  end
+end
+
+-- act(kinds, fn): run fn(repo, item) when the current item's kind is allowed
+local function act(kinds, fn)
+  return function()
+    local it = current()
+    if not it then return end
+    if not vim.tbl_contains(kinds, it.kind) then
+      local names = { issue = "issues", pr = "pull requests", run = "runs" }
+      return vim.notify("upstream: that key works on " .. table.concat(vim.tbl_map(function(k)
+        return names[k]
+      end, kinds), " and "), vim.log.levels.INFO)
+    end
+    fn(ui.repo, it)
+  end
+end
+
+local function ai_menu()
+  local it = current()
+  local repo = ui.repo
+  local items = {}
+  if it and it.kind == "issue" then
+    items[#items + 1] = { label = "Work on this issue", desc = "chat seeded with the issue", value = "work" }
+  elseif it and it.kind == "pr" then
+    items[#items + 1] = { label = "Review assist", desc = "AI drafts into your pending review", value = "assist" }
+    items[#items + 1] = { label = "Work on this PR", desc = "chat seeded with the PR", value = "work" }
+  end
+  items[#items + 1] = { label = "Draft a PR from this branch", desc = "title + body from the commits and diff", value = "draft" }
+  require("upstream.ui.pick").open({ title = "AI", items = items }, function(ch)
+    if not ch then return end
+    if ch.value == "draft" then return require("upstream.actions").new_pr(repo, { ai = true }) end
+    if not it then return end
+    if ch.value == "assist" then return require("upstream.review").open(repo, it.number, { assist = true }) end
+    require("upstream.actions").ensure(repo, it, function(d) require("upstream.ai").work_on(repo, d) end)
+  end)
+end
+
+local function new_item()
+  local tab = st().tab
+  if tab == "prs" or tab == "reviews" then return require("upstream.actions").new_pr(ui.repo) end
+  require("upstream.actions").new_issue(ui.repo)
+end
+
+-- A mutation returned a fresh item: patch it into every list and the detail.
+local function patch(it)
+  if not is_open() or not it then return end
+  local k = key_of(it)
+  fresh[ui.repo.full .. ":" .. k] = os.time()
+  for _, v in pairs(st().views) do
+    for _, x in ipairs(v.items) do
+      if key_of(x) == k then
+        for _, f in ipairs({ "title", "state", "labels", "draft", "review", "checks", "comments", "updated", "base" }) do
+          x[f] = it[f]
+        end
+      end
+    end
+    -- membership may have changed (closed, merged): refetch on next visit
+    v.fetched = nil
+  end
+  render_list()
+  if ui.shown_key == k then draw_detail(it) end
+end
+
 local function browse()
   local it = vim.api.nvim_get_current_win() == ui.list and selected() or nil
   if not it and ui.shown_key then
@@ -400,16 +475,29 @@ end
 
 local function help()
   local k = config.options.keys
+  local function key(x) return x or "—" end
   local rows = {
     { "j / k / G", "move (G on “load more” loads the next page)" },
-    { k.next_tab .. " / " .. k.prev_tab .. " / 1–4", "switch tab" },
-    { k.focus, "focus the detail pane (" .. k.back .. " / q back)" },
-    { k.scroll_down .. " / " .. k.scroll_up, "scroll the detail pane" },
-    { k.filter, "filter (<Esc> clears)" },
-    { k.state, "state: open → closed → all" },
-    { k.refresh, "refresh" },
-    { k.browser, "open in the browser" },
-    { k.close .. " / <Esc>", "close" },
+    { key(k.next_tab) .. " / " .. key(k.prev_tab) .. " / 1–4", "switch tab" },
+    { key(k.focus), "focus the detail pane (" .. key(k.back) .. " / q back)" },
+    { key(k.scroll_down) .. " / " .. key(k.scroll_up), "scroll the detail pane" },
+    { key(k.filter), "filter (<Esc> clears)" },
+    { key(k.state), "state: open → closed → all" },
+    { key(k.refresh), "refresh" },
+    { key(k.browser), "open in the browser" },
+    { "", "" },
+    { key(k.comment) .. " / " .. key(k.edit), "comment / edit title and body" },
+    { key(k.toggle_state), "close / reopen (run: cancel)" },
+    { key(k.labels) .. " / " .. key(k.assignees) .. " / " .. key(k.milestone), "labels / assignees / milestone" },
+    { key(k.reviewers), "request reviewers (PR)" },
+    { key(k.merge), "merge (PR; on a merged PR: delete its branch)" },
+    { key(k.checkout), "check out the PR branch" },
+    { key(k.review), "review the PR (run: re-run)" },
+    { key(k.new), "new issue (Issues tab) / new PR (PR tabs)" },
+    { key(k.logs), "run log (Actions)" },
+    { key(k.ai), "AI: work on issue, review assist, draft PR" },
+    { "", "" },
+    { key(k.close) .. " / <Esc>", "close" },
   }
   local lines = { "" }
   for _, r in ipairs(rows) do lines[#lines + 1] = ("  %-22s %s"):format(r[1], r[2]) end
@@ -417,7 +505,9 @@ local function help()
   local buf = scratch()
   set_lines(buf, lines)
   for i = 1, #rows do
-    vim.api.nvim_buf_set_extmark(buf, ns, i, 2, { end_col = 24, hl_group = "UpstreamAccent" })
+    if rows[i][1] ~= "" then
+      vim.api.nvim_buf_set_extmark(buf, ns, i, 2, { end_col = 24, hl_group = "UpstreamAccent" })
+    end
   end
   local w = 0
   for _, l in ipairs(lines) do w = math.max(w, vim.fn.strdisplaywidth(l)) end
@@ -435,8 +525,8 @@ local function help()
     focus_list()
     if valid_win(win) then vim.api.nvim_win_close(win, true) end
   end
-  for _, key in ipairs({ "q", "<Esc>", "?" }) do
-    vim.keymap.set("n", key, close_help, { buffer = buf, nowait = true })
+  for _, lhs in ipairs({ "q", "<Esc>", "?" }) do
+    vim.keymap.set("n", lhs, close_help, { buffer = buf, nowait = true })
   end
 end
 
@@ -479,6 +569,41 @@ local function keymaps()
   map(db, "<Esc>", focus_list)
   map(db, k.help, help)
   map(db, k.refresh, refresh)
+  map(db, k.browser, browse)
+
+  -- manage. The detail pane is a reading buffer, so it only gets the keys
+  -- that aren't motions/search there (e l v n L M stay Vim's).
+  local A = function(name) return function(repo, it) require("upstream.actions")[name](repo, it) end end
+  local runs = function(name) return function(repo, it) require("upstream.runs")[name](repo, it) end end
+  local IP = { "issue", "pr" }
+  local both = {
+    comment = act(IP, A("comment")),
+    toggle_state = act({ "issue", "pr", "run" }, function(repo, it)
+      if it.kind == "run" then return runs("cancel")(repo, it) end
+      A("toggle_state")(repo, it)
+    end),
+    assignees = act(IP, A("assignees")),
+    merge = act({ "pr" }, A("merge")),
+    checkout = act({ "pr" }, A("checkout")),
+    review = act({ "pr", "run" }, function(repo, it)
+      if it.kind == "run" then return runs("rerun")(repo, it) end
+      require("upstream.review").open(repo, it.number)
+    end),
+    ai = ai_menu,
+  }
+  local list_only = {
+    edit = act(IP, A("edit")),
+    labels = act(IP, A("labels")),
+    milestone = act(IP, A("milestone")),
+    reviewers = act({ "pr" }, A("reviewers")),
+    logs = act({ "run" }, runs("logs")),
+    new = new_item,
+  }
+  for name, fn in pairs(both) do
+    map(lb, k[name], fn)
+    map(db, k[name], fn)
+  end
+  for name, fn in pairs(list_only) do map(lb, k[name], fn) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -493,8 +618,14 @@ end
 
 local function hints()
   local k = config.options.keys
-  return (" %s open · %s filter · %s state · %s refresh · %s web · %s help · %s close ")
-    :format(k.focus, k.filter, k.state, k.refresh, k.browser, k.help, k.close)
+  local parts = {}
+  for _, p in ipairs({
+    { k.focus, "open" }, { k.comment, "comment" }, { k.toggle_state, "close" }, { k.labels, "labels" },
+    { k.merge, "merge" }, { k.review, "review" }, { k.ai, "ai" }, { k.browser, "web" }, { k.help, "help" },
+  }) do
+    if p[1] then parts[#parts + 1] = p[1] .. " " .. p[2] end
+  end
+  return " " .. table.concat(parts, " · ") .. " "
 end
 
 local function build(repo, tab)
@@ -574,7 +705,11 @@ local function build(repo, tab)
   vim.api.nvim_create_autocmd("User", {
     group = ui.augroup,
     pattern = "UpstreamChanged",
-    callback = function() render_frame() end,
+    callback = function(ev)
+      local d = ev.data or {}
+      if d.item and ui.repo and d.repo == ui.repo.full then return patch(d.item) end
+      render_frame()
+    end,
   })
 
   render_title()

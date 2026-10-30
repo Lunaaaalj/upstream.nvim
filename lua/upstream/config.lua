@@ -9,6 +9,10 @@ M.defaults = {
   per_page = 50,
   -- tab opened the first time; afterwards the last tab is remembered
   tab = "issues",
+  -- where compose buffers (comments, edits, new issues/PRs) open:
+  -- "current" window, "split", "vsplit" or "tab". The review view always
+  -- uses a split so the diff stays visible.
+  compose = "current",
   -- highlight overrides: { UpstreamTitle = { link = "Title" }, ... }
   highlights = {},
   -- float-local keys; set one to false to disable it
@@ -25,10 +29,34 @@ M.defaults = {
     scroll_up = "<C-u>",
     help = "?",
     close = "q",
+    -- manage (issues / PRs)
+    comment = "c",
+    edit = "e",
+    toggle_state = "x",
+    labels = "l",
+    assignees = "a",
+    reviewers = "v",
+    milestone = "M",
+    merge = "m",
+    checkout = "o",
+    new = "n",
+    review = "R",
+    ai = "A",
+    -- Actions tab (on a run: R re-runs, x cancels)
+    logs = "L",
   },
-  -- reserved for later phases (AI drafts / work on issue)
+  -- AI drafts through headless Claude Code (`<command> -p --output-format json`)
   ai = {
     command = "claude",
+    -- extra CLI args for the headless runs, e.g. { "--model", "sonnet" }
+    args = {},
+    -- ms; reviews of big PRs take a while
+    timeout = 300000,
+    -- upper bound on review-assist findings per run
+    max_findings = 15,
+    -- function(prompt, ctx) that starts an interactive chat seeded with
+    -- `prompt` ("work on this issue"); ctx = { repo, number, kind, title, url }.
+    -- nil = `:tabnew` + `:terminal <command> <prompt>`
     open_chat = nil,
   },
 }

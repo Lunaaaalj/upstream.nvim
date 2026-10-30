@@ -21,6 +21,13 @@ M.links = {
   UpstreamPending = "DiagnosticWarn",
   UpstreamLabel = "Special",
   UpstreamNumber = "Number",
+  -- review diff
+  UpstreamDiffAdd = "DiffAdd",
+  UpstreamDiffDelete = "DiffDelete",
+  UpstreamDiffHunk = "Comment",
+  UpstreamDiffFile = "Title",
+  UpstreamLineNr = "LineNr",
+  UpstreamDraftAI = "DiagnosticHint",
 }
 
 function M.setup()

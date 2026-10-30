@@ -59,6 +59,13 @@ local function state_text(it)
   return ({ OPEN = "Open", CLOSED = "Closed", MERGED = "Merged" })[it.state] or it.state or ""
 end
 
+local RUN_GLYPH = { success = "✓", failure = "✗", timed_out = "✗", cancelled = "⊘", skipped = "–" }
+
+local function run_glyph(x)
+  if x.status and x.status ~= "completed" then return "●" end
+  return RUN_GLYPH[x.conclusion or ""] or "·"
+end
+
 local function run_lines(it)
   local out = {
     "# " .. (it.workflow or "workflow"),
@@ -69,9 +76,26 @@ local function run_lines(it)
     "",
     "Status: **" .. (it.status or "?") .. "**" .. (it.conclusion and it.conclusion ~= ""
       and (" · conclusion: **" .. it.conclusion .. "**") or ""),
-    "",
-    "_Logs and re-run arrive in a later version; `gx` opens the run._",
   }
+  if it.jobs then
+    out[#out + 1] = ""
+    out[#out + 1] = "## Jobs"
+    for _, j in ipairs(it.jobs) do
+      out[#out + 1] = ""
+      out[#out + 1] = ("- %s **%s**"):format(run_glyph(j), j.name or "job")
+      for _, st in ipairs(j.steps or {}) do
+        -- skipped steps are noise in a long workflow
+        if st.conclusion ~= "skipped" then
+          out[#out + 1] = ("  - %s %s"):format(run_glyph(st), st.name or "")
+        end
+      end
+    end
+  else
+    out[#out + 1] = ""
+    out[#out + 1] = "_loading jobs…_"
+  end
+  out[#out + 1] = ""
+  out[#out + 1] = "_L log · R re-run · x cancel · gx open in the browser_"
   return out
 end
 
@@ -108,7 +132,9 @@ function M.lines(it)
     facts[#facts + 1] = "- Assignees: " .. table.concat(vim.tbl_map(function(a) return "@" .. a end, it.assignees), ", ")
   end
   if it.reviewers and #it.reviewers > 0 then
-    facts[#facts + 1] = "- Reviewers: " .. table.concat(vim.tbl_map(function(a) return "@" .. a end, it.reviewers), ", ")
+    facts[#facts + 1] = "- Reviewers: " .. table.concat(vim.tbl_map(function(a)
+      return "@" .. (type(a) == "table" and a.name or a)
+    end, it.reviewers), ", ")
   end
   if it.milestone then facts[#facts + 1] = "- Milestone: " .. it.milestone end
   if it.closes and #it.closes > 0 then

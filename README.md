@@ -58,7 +58,7 @@ Also `:Upstream new-issue`, `:Upstream new-pr`, `:Upstream draft-pr` (AI) and `:
 | `c` · `e`                 | comment · edit title/body                                 |
 | `x`                       | close / reopen (on a run: cancel)                         |
 | `l` · `a` · `M` · `v`     | labels · assignees · milestone · reviewers (pickers)      |
-| `m` · `o`                 | merge (then offers to delete the branch) · check out      |
+| `m` · `o`                 | merge (then offers to delete the branch; on conflicts, offers to merge the base in locally) · check out |
 | `R`                       | review the PR (on a run: re-run)                          |
 | `L`                       | run log (Actions tab)                                     |
 | `n`                       | new issue / new PR (depends on the tab)                   |

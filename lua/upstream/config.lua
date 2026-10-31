@@ -13,6 +13,9 @@ M.defaults = {
   -- "current" window, "split", "vsplit" or "tab". The review view always
   -- uses a split so the diff stays visible.
   compose = "current",
+  -- local branch for "work on this issue": a template ({number}, {slug},
+  -- {title}) or function(issue) -> name
+  issue_branch = "{number}-{slug}",
   -- highlight overrides: { UpstreamTitle = { link = "Title" }, ... }
   highlights = {},
   -- float-local keys; set one to false to disable it
@@ -40,6 +43,8 @@ M.defaults = {
     merge = "m",
     checkout = "o",
     new = "n",
+    configure = "C",
+    work_on = "w",
     review = "R",
     ai = "A",
     -- Actions tab (on a run: R re-runs, x cancels)

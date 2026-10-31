@@ -487,7 +487,9 @@ local function help()
     { key(k.browser), "open in the browser" },
     { "", "" },
     { key(k.comment) .. " / " .. key(k.edit), "comment / edit title and body" },
-    { key(k.toggle_state), "close / reopen (run: cancel)" },
+    { key(k.toggle_state), "close (completed / not planned) / reopen (run: cancel)" },
+    { key(k.configure), "configure: every setting of the issue / PR in one menu" },
+    { key(k.work_on), "work on the issue: switch to branch <number>-<title>" },
     { key(k.labels) .. " / " .. key(k.assignees) .. " / " .. key(k.milestone), "labels / assignees / milestone" },
     { key(k.reviewers), "request reviewers (PR)" },
     { key(k.merge), "merge (PR; on a merged PR: delete its branch)" },
@@ -572,7 +574,7 @@ local function keymaps()
   map(db, k.browser, browse)
 
   -- manage. The detail pane is a reading buffer, so it only gets the keys
-  -- that aren't motions/search there (e l v n L M stay Vim's).
+  -- that aren't motions/search there (e l v n w L M stay Vim's).
   local A = function(name) return function(repo, it) require("upstream.actions")[name](repo, it) end end
   local runs = function(name) return function(repo, it) require("upstream.runs")[name](repo, it) end end
   local IP = { "issue", "pr" }
@@ -589,6 +591,7 @@ local function keymaps()
       if it.kind == "run" then return runs("rerun")(repo, it) end
       require("upstream.review").open(repo, it.number)
     end),
+    configure = act(IP, A("configure")),
     ai = ai_menu,
   }
   local list_only = {
@@ -597,6 +600,7 @@ local function keymaps()
     milestone = act(IP, A("milestone")),
     reviewers = act({ "pr" }, A("reviewers")),
     logs = act({ "run" }, runs("logs")),
+    work_on = act({ "issue" }, A("work_on")),
     new = new_item,
   }
   for name, fn in pairs(both) do
@@ -620,7 +624,8 @@ local function hints()
   local k = config.options.keys
   local parts = {}
   for _, p in ipairs({
-    { k.focus, "open" }, { k.comment, "comment" }, { k.toggle_state, "close" }, { k.labels, "labels" },
+    { k.focus, "open" }, { k.comment, "comment" }, { k.toggle_state, "close" }, { k.configure, "configure" },
+    { k.work_on, "work on" },
     { k.merge, "merge" }, { k.review, "review" }, { k.ai, "ai" }, { k.browser, "web" }, { k.help, "help" },
   }) do
     if p[1] then parts[#parts + 1] = p[1] .. " " .. p[2] end

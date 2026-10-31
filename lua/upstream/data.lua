@@ -220,6 +220,7 @@ local function detail_item(node)
   it.body = node.body
   it.assignees = vim.tbl_map(login, vim.tbl_get(node, "assignees", "nodes") or {})
   it.milestone = vim.tbl_get(node, "milestone", "title")
+  it.state_reason = node.stateReason -- issues: COMPLETED / NOT_PLANNED / DUPLICATE / REOPENED
   it.timeline = timeline(node)
   it.timeline_total = vim.tbl_get(node, "timelineItems", "totalCount") or #it.timeline
   it.id = node.id

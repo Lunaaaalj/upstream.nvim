@@ -10,7 +10,7 @@ Browse and manage the current repository's issues, pull requests, review request
 │  #29 feat: music player ✓     │ # #29 feat: music player                         │
 │  #28 fix(pdfview): spinner    │ Open · author wants to merge feat/music → main   │
 │  ...                           │ ✓ checks · 2 approvals · +1,204 −38 · 9 files    │
-╰── <CR> open · c comment · x close · l labels · m merge · R review · A ai · ? help ─╯
+╰─ <CR> open · c comment · x close · C configure · w work on · m merge · R review · ? help ─╯
 ```
 
 ## Requirements
@@ -56,7 +56,9 @@ Also `:Upstream new-issue`, `:Upstream new-pr`, `:Upstream draft-pr` (AI) and `:
 | `<C-d>` `<C-u>`           | scroll the detail pane from the list                      |
 | `/` · `s`                 | filter (title, `#number`, author, labels) · open/closed/all |
 | `c` · `e`                 | comment · edit title/body                                 |
-| `x`                       | close / reopen (on a run: cancel)                         |
+| `x`                       | close as completed / not planned, or reopen (on a run: cancel) |
+| `C`                       | configure: one menu with every setting (labels, assignees, assign yourself, milestone, state, …) |
+| `w`                       | work on the issue: switch to a local `<number>-<slug>` branch, created from the fetched default branch |
 | `l` · `a` · `M` · `v`     | labels · assignees · milestone · reviewers (pickers)      |
 | `m` · `o`                 | merge (then offers to delete the branch; on conflicts, offers to merge the base in locally) · check out |
 | `R`                       | review the PR (on a run: re-run)                          |
@@ -91,7 +93,7 @@ Claude Code runs headless (`claude -p --output-format json`) and only ever produ
 
 - **Draft PR**: title and body from `git log` + the diff, opened in the new-PR compose buffer.
 - **Review assist**: findings validated against the hunks, shown inline and in a drafts list where you accept (`a`), edit (`e`) or drop (`d`) each one into your pending review.
-- **Work on this issue**: optionally `git switch -c <n>-<slug>`, then a chat seeded with the issue (`ai.open_chat`, default `:terminal claude`).
+- **Work on this issue**: optionally switches to the issue branch (same as `w`), then a chat seeded with the issue (`ai.open_chat`, default `:terminal claude`).
 
 ### Actions
 
@@ -105,6 +107,7 @@ require("upstream").setup({
   per_page = 50,       -- items per page (max 100)
   tab = "issues",      -- tab opened the first time
   compose = "current", -- where compose buffers open: current/split/vsplit/tab
+  issue_branch = "{number}-{slug}", -- `w` branch: {number} {slug} {title}, or function(issue)
   highlights = {},     -- e.g. { UpstreamSel = { link = "Visual" } }
   keys = { ... },      -- see :help upstream-keys; false disables a key
   ai = {

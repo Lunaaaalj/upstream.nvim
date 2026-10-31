@@ -191,11 +191,6 @@ local function default_open_chat(prompt, _ctx)
   vim.cmd.startinsert()
 end
 
-local function slug(s)
-  s = (s or ""):lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
-  return (s:sub(1, 40):gsub("-+$", ""))
-end
-
 local function issue_prompt(repo, it)
   local out = {
     ("Let's work on GitHub issue #%d in %s: %s"):format(it.number, repo.full, it.title or ""),
@@ -226,14 +221,13 @@ function M.work_on(repo, it)
     fn(prompt, { repo = repo.full, number = it.number, kind = it.kind, title = it.title, url = it.url })
   end
   if it.kind ~= "issue" then return go() end
-  local branch = ("%d-%s"):format(it.number, slug(it.title))
-  local c = vim.fn.confirm(("Work on #%d — create branch %s first?"):format(it.number, branch),
-    "&Create branch\n&Stay on this branch\n&Cancel", 1, "Question")
+  local actions = require("upstream.actions")
+  local branch = actions.branch_name(it)
+  local c = vim.fn.confirm(("Work on #%d — switch to branch %s first?"):format(it.number, branch),
+    "&Branch\n&Stay on this branch\n&Cancel", 1, "Question")
   if c == 1 then
-    git.run({ "switch", "-c", branch }, function(err)
-      if err then return vim.notify("upstream: " .. err, vim.log.levels.ERROR) end
-      vim.notify("upstream: switched to " .. branch, vim.log.levels.INFO)
-      go()
+    actions.start_branch(repo, it, function(err)
+      if not err then go() end
     end)
   elseif c == 2 then
     go()

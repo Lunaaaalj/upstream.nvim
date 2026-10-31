@@ -75,7 +75,26 @@ Manage (issues and PRs):
   c                 Comment.                         comment
   e                 Edit the title and body          edit
                     (PRs: and the base branch).
-  x                 Close / reopen (confirms).       toggle_state
+  x                 Close as completed or as not     toggle_state
+                    planned (issues), close (PRs),
+                    or reopen. Confirms.
+  C                 Configure: a menu with every     configure
+                    setting of the issue / PR and
+                    its current value (edit,
+                    labels, assignees, assign /
+                    unassign yourself, reviewers,
+                    milestone, close / reopen,
+                    work on, check out, merge,
+                    comment).
+  w                 Work on the issue: switch to     work_on
+                    its local branch (see
+                    `issue_branch`). An existing
+                    branch is switched to; a new
+                    one is created from the freshly
+                    fetched default branch (or,
+                    if you choose, the current
+                    branch), without an upstream
+                    so the first push sets it.
   l                 Labels (picker).                 labels
   a                 Assignees (picker).              assignees
   M                 Milestone (picker).              milestone
@@ -103,9 +122,9 @@ Manage (issues and PRs):
 
 On a CI run: `L` log, `R` re-run, `x` cancel (|upstream-actions|).
 
-In the detail pane: `<C-h>`, `q` or `<Esc>` return to the list. `c x a m o R A`
+In the detail pane: `<C-h>`, `q` or `<Esc>` return to the list. `c x a m o R C A`
 and `gx` work there too; the other manage keys are list-only so that motions
-like `e`, `l`, `v` and search with `n` keep working while you read.
+like `e`, `l`, `v`, `w` and search with `n` keep working while you read.
 
 Pickers (labels, assignees, reviewers): `<Space>` or `<Tab>` toggles, `<CR>`
 applies, `q` cancels. Use `/` to search in them.
@@ -205,7 +224,7 @@ Review assist ~
   Submitting the review is still a separate `S`.
 
 Work on this issue ~
-  Offers to `git switch -c <number>-<slug>` first, then starts an
+  Offers to switch to the issue branch first (as `w` does), then starts an
   interactive chat seeded with the issue's title, body and comments. The
   chat is opened by `ai.open_chat(prompt, ctx)`; by default that's
   `:tabnew` + `:terminal claude <prompt>`.
@@ -234,6 +253,9 @@ more"). The detail pane shows the run's jobs and steps.
       tab = "issues",      -- tab opened the first time
       compose = "current", -- compose buffers: "current", "split",
                            -- "vsplit" or "tab" (review always splits)
+      issue_branch = "{number}-{slug}", -- branch for `w`: a template
+                           -- ({number}, {slug}, {title}) or
+                           -- function(issue) -> name
       highlights = {},     -- { GroupName = hl-spec } (|nvim_set_hl()|)
       keys = {             -- set a key to false to disable it
         next_tab = "<Tab>", prev_tab = "<S-Tab>", filter = "/",
@@ -242,7 +264,8 @@ more"). The detail pane shows the run's jobs and steps.
         help = "?", close = "q",
         comment = "c", edit = "e", toggle_state = "x", labels = "l",
         assignees = "a", reviewers = "v", milestone = "M", merge = "m",
-        checkout = "o", new = "n", review = "R", ai = "A", logs = "L",
+        checkout = "o", new = "n", configure = "C", work_on = "w",
+        review = "R", ai = "A", logs = "L",
       },
       ai = {
         command = "claude",  -- Claude Code CLI

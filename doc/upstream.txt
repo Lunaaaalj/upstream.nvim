@@ -86,6 +86,14 @@ Manage (issues and PRs):
                     draft it offers "ready for
                     review"; on a merged PR it
                     offers the branch deletion.
+                    On a PR with conflicts it
+                    offers to resolve them
+                    locally: checks out the PR
+                    branch, fetches the base and
+                    merges it in, leaving the
+                    conflicts in the quickfix
+                    list for you to fix, commit
+                    and push.
   o                 Check out the PR branch          checkout
                     (`gh pr checkout`, confirms).
   R                 Review the PR (|upstream-review|). review

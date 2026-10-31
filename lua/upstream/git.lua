@@ -38,6 +38,35 @@ function M.upstream_state(cb)
   end)
 end
 
+-- dirty(cb(err, is_dirty)): tracked changes only; untracked files don't block a merge
+function M.dirty(cb)
+  M.run({ "status", "--porcelain", "--untracked-files=no" }, function(err, out)
+    cb(err, not err and vim.trim(out) ~= "")
+  end)
+end
+
+-- remote_for("owner/name", cb(remote)): the remote whose URL points at the
+-- repo (a fork clone has the base repo on `upstream`, not `origin`)
+function M.remote_for(full, cb)
+  M.run({ "remote", "-v" }, function(err, out)
+    if err then return cb("origin") end
+    local want = full:lower()
+    for line in out:gmatch("[^\n]+") do
+      local name, url = line:match("^(%S+)%s+(%S+)")
+      local path = url and url:lower():gsub("%.git$", ""):match("[:/]([^/:]+/[^/:]+)$")
+      if path == want then return cb(name) end
+    end
+    cb("origin")
+  end)
+end
+
+-- conflicts(cb(files)): paths with unresolved conflicts
+function M.conflicts(cb)
+  M.run({ "diff", "--name-only", "--diff-filter=U" }, function(err, out)
+    cb(err and {} or vim.split(vim.trim(out or ""), "\n", { trimempty = true }))
+  end)
+end
+
 function M.push(branch, cb)
   M.run({ "push", "-u", "origin", branch }, cb, 60000)
 end

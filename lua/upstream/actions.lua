@@ -248,7 +248,12 @@ function M.merge(repo, it)
       end
       return
     end
-    if d.mergeable == "CONFLICTING" then return warn(label(d) .. " has conflicts with " .. (d.base or "the base")) end
+    if d.mergeable == "CONFLICTING" then
+      local msg = ("%s has merge conflicts with %s and can't be merged.\nCheck it out and merge %s into it to resolve them locally?")
+        :format(label(d), d.base or "the base", d.base or "the base")
+      if confirm(msg, "&Resolve locally\n&Cancel", 2) == 1 then M.resolve_conflicts(repo, d) end
+      return
+    end
     local extra = ""
     if d.checks == "FAILURE" or d.checks == "ERROR" then extra = " (checks are failing)" end
     if d.checks == "PENDING" then extra = " (checks are still running)" end
@@ -274,6 +279,51 @@ function M.checkout(repo, it)
     vim.cmd.checktime()
     data.touch(repo, "branch")
   end, { cwd = vim.fn.getcwd(), timeout = 60000 })
+end
+
+-- A conflicting PR can't be merged on GitHub, so bring it up to date here:
+-- check out the PR branch (`gh pr checkout` fast-forwards it to its remote
+-- head), fetch the base, and merge it in. Conflicts are left in the working
+-- tree, listed in the quickfix list, for the user to resolve, commit and push.
+function M.resolve_conflicts(repo, d)
+  local err_ = function(e) vim.notify("upstream: " .. e, vim.log.levels.ERROR) end
+  local base = d.base
+  if not base then return warn("unknown base branch for " .. label(d)) end
+  git.dirty(function(err, dirty)
+    if err then return err_(err) end
+    if dirty then return warn("the working tree has uncommitted changes; commit or stash them first") end
+    info(("checking out %s…"):format(label(d)))
+    gh.run({ "pr", "checkout", tostring(d.number), "-R", repo.full }, function(cerr)
+      if cerr then return err_(cerr) end
+      data.touch(repo, "branch")
+      git.remote_for(repo.full, function(remote)
+        local ref = remote .. "/" .. base
+        git.run({ "fetch", remote, base }, function(ferr)
+          if ferr then return err_(ferr) end
+          git.run({ "merge", "--no-edit", ref }, function(merr)
+            vim.cmd.checktime()
+            if not merr then
+              return info(("merged %s into %s cleanly; push to update %s"):format(ref, d.head or "the branch", label(d)))
+            end
+            git.conflicts(function(files)
+              if #files == 0 then return err_(merr) end
+              local root = vim.fn.getcwd()
+              vim.fn.setqflist({}, " ", {
+                title = ("upstream: %s conflicts with %s"):format(label(d), ref),
+                items = vim.tbl_map(function(f)
+                  return { filename = root .. "/" .. f, lnum = 1, text = "merge conflict" }
+                end, files),
+              })
+              leave_float()
+              vim.cmd("botright copen")
+              warn(("%d file%s conflict with %s. Resolve them, then `git commit` and push (or `git merge --abort`)")
+                :format(#files, #files == 1 and "" or "s", ref))
+            end)
+          end, 30000)
+        end, 60000)
+      end)
+    end, { cwd = vim.fn.getcwd(), timeout = 60000 })
+  end)
 end
 
 -- ---------------------------------------------------------------------------

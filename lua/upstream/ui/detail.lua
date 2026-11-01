@@ -56,6 +56,8 @@ local REVIEW_TEXT = {
 
 local function state_text(it)
   if it.kind == "pr" and it.draft and it.state == "OPEN" then return "Draft" end
+  if it.state == "CLOSED" and it.state_reason == "NOT_PLANNED" then return "Closed as not planned" end
+  if it.state == "CLOSED" and it.state_reason == "DUPLICATE" then return "Closed as duplicate" end
   return ({ OPEN = "Open", CLOSED = "Closed", MERGED = "Merged" })[it.state] or it.state or ""
 end
 

@@ -89,7 +89,7 @@ local COMMON = [[
 -- Selections shared by the detail queries and every mutation's payload, so a
 -- write returns exactly what a read would and can go straight into the cache.
 M.ISSUE_DETAIL = ([[
-  __typename %s
+  __typename stateReason %s
   %s
 ]]):format(COMMON, TIMELINE:format("ISSUE_COMMENT, CLOSED_EVENT, REOPENED_EVENT, CROSS_REFERENCED_EVENT", ""))
 
@@ -168,7 +168,9 @@ mutation($id: ID!, $title: String, $body: String, $base: String, $labelIds: [ID!
 }]]):format(M.PR_DETAIL)
 
 M.close_issue = ([[
-mutation($id: ID!) { closeIssue(input: { issueId: $id }) { issue { %s } } }]]):format(M.ISSUE_DETAIL)
+mutation($id: ID!, $reason: IssueClosedStateReason) {
+  closeIssue(input: { issueId: $id, stateReason: $reason }) { issue { %s } }
+}]]):format(M.ISSUE_DETAIL)
 
 M.reopen_issue = ([[
 mutation($id: ID!) { reopenIssue(input: { issueId: $id }) { issue { %s } } }]]):format(M.ISSUE_DETAIL)

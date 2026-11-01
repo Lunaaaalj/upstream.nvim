@@ -110,21 +110,40 @@ end
 -- state
 -- ---------------------------------------------------------------------------
 
+local CLOSE_REASONS = { "COMPLETED", "NOT_PLANNED" }
+
+-- close_issue(repo, detail, reason): reason = COMPLETED | NOT_PLANNED
+function M.close_issue(repo, d, reason)
+  data.mutate(repo, queries.close_issue, { id = d.id, reason = reason }, { "closeIssue", "issue" }, function(err)
+    if err then return end
+    info(("closed %s%s"):format(label(d), reason == "NOT_PLANNED" and " as not planned" or ""))
+  end)
+end
+
+function M.reopen(repo, d)
+  local q, path = queries.reopen_issue, { "reopenIssue", "issue" }
+  if d.kind == "pr" then q, path = queries.reopen_pr, { "reopenPullRequest", "pullRequest" } end
+  data.mutate(repo, q, { id = d.id }, path, function(err)
+    if not err then info("reopened " .. label(d)) end
+  end)
+end
+
 function M.toggle_state(repo, it)
   M.ensure(repo, it, function(d)
     if d.state == "MERGED" then return warn(label(d) .. " is merged") end
-    local closing = d.state == "OPEN"
-    if confirm(("%s %s %s?"):format(closing and "Close" or "Reopen", label(d), d.title)) ~= 1 then return end
-    local q, path
-    if d.kind == "pr" then
-      q, path = closing and queries.close_pr or queries.reopen_pr,
-        { closing and "closePullRequest" or "reopenPullRequest", "pullRequest" }
-    else
-      q, path = closing and queries.close_issue or queries.reopen_issue,
-        { closing and "closeIssue" or "reopenIssue", "issue" }
+    if d.state ~= "OPEN" then
+      if confirm(("Reopen %s %s?"):format(label(d), d.title)) == 1 then M.reopen(repo, d) end
+      return
     end
-    data.mutate(repo, q, { id = d.id }, path, function(err)
-      if not err then info((closing and "closed " or "reopened ") .. label(d)) end
+    if d.kind == "issue" then
+      -- GitHub's two close flavours; the reason shows in the issue's timeline
+      local c = confirm(("Close %s %s?"):format(label(d), d.title), "&Completed\n&Not planned\n&Cancel", 1)
+      if CLOSE_REASONS[c] then M.close_issue(repo, d, CLOSE_REASONS[c]) end
+      return
+    end
+    if confirm(("Close %s %s?"):format(label(d), d.title)) ~= 1 then return end
+    data.mutate(repo, queries.close_pr, { id = d.id }, { "closePullRequest", "pullRequest" }, function(err)
+      if not err then info("closed " .. label(d)) end
     end)
   end)
 end
@@ -462,6 +481,170 @@ function M.new_pr(repo, opts)
         local lines = {}
         for _, c in ipairs(commits) do lines[#lines + 1] = "- " .. c.subject end
         open(title, table.concat(lines, "\n"))
+      end)
+    end)
+  end)
+end
+
+
+-- ---------------------------------------------------------------------------
+-- work on an issue: a local branch named after it
+-- ---------------------------------------------------------------------------
+
+local function slug(s)
+  s = (s or ""):lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
+  return (s:sub(1, 40):gsub("-+$", ""))
+end
+
+-- branch_name(issue): config.issue_branch, a "{number}-{slug}" template or a
+-- function(issue) -> name
+function M.branch_name(it)
+  local fmt = require("upstream.config").options.issue_branch or "{number}-{slug}"
+  if type(fmt) == "function" then return fmt(it) end
+  return (fmt:gsub("{(%w+)}", function(k)
+    if k == "number" then return tostring(it.number) end
+    if k == "slug" then return slug(it.title) end
+    if k == "title" then return it.title or "" end
+  end))
+end
+
+local function switched(repo, name, cb)
+  vim.cmd.checktime()
+  data.touch(repo, "branch")
+  info("switched to " .. name)
+  if cb then cb(nil, name) end
+end
+
+-- start_branch(repo, issue, cb(err, branch)): switch to the issue's branch,
+-- creating it from the up-to-date default branch (or the current one) when it
+-- doesn't exist yet. Asks before touching anything; cb isn't called on cancel.
+function M.start_branch(repo, it, cb)
+  local fail = function(e)
+    vim.notify("upstream: " .. e, vim.log.levels.ERROR)
+    if cb then cb(e) end
+  end
+  local name = M.branch_name(it)
+  git.branch(function(_, cur)
+    if cur == name then
+      info("already on " .. name)
+      if cb then cb(nil, name) end
+      return
+    end
+    git.has_branch(name, function(exists)
+      if exists then
+        if confirm(("Branch %s already exists. Switch to it?"):format(name)) ~= 1 then return end
+        return git.run({ "switch", name }, function(err)
+          if err then return fail(err) end
+          switched(repo, name, cb)
+        end)
+      end
+      local default = repo.default_branch or "main"
+      git.remote_for(repo.full, function(remote)
+        local upstream_base = remote .. "/" .. default
+        local from_default
+        if cur and cur ~= default then
+          local c = confirm(("Create branch %s from:"):format(name),
+            ("&%s (fetched)\n&current branch (%s)\n&Cancel"):format(upstream_base, cur), 1)
+          if c ~= 1 and c ~= 2 then return end
+          from_default = c == 1
+        else
+          if confirm(("Create branch %s from %s?"):format(name, upstream_base)) ~= 1 then return end
+          from_default = true
+        end
+        local function create(start)
+          git.create_branch(name, start, function(err)
+            if err then return fail(err) end
+            switched(repo, name, cb)
+          end)
+        end
+        if not from_default then return create(nil) end
+        info(("fetching %s…"):format(upstream_base))
+        -- offline / no remote branch: fall back to the local default branch
+        git.run({ "fetch", remote, default }, function(ferr)
+          git.has_ref(upstream_base, function(ok)
+            if ok then return create(upstream_base) end
+            if ferr then warn(ferr) end
+            git.has_branch(default, function(local_ok)
+              if not local_ok then return fail(("neither %s nor %s exists"):format(upstream_base, default)) end
+              create(default)
+            end)
+          end)
+        end, 60000)
+      end)
+    end)
+  end)
+end
+
+function M.work_on(repo, it)
+  if it.kind ~= "issue" then return warn("work on works on issues; use checkout for a PR") end
+  M.ensure(repo, it, function(d)
+    if d.state ~= "OPEN" and confirm(("%s is closed. Work on it anyway?"):format(label(d))) ~= 1 then return end
+    M.start_branch(repo, d)
+  end)
+end
+
+-- ---------------------------------------------------------------------------
+-- configure: every setting of an issue / PR in one menu
+-- ---------------------------------------------------------------------------
+
+local function names(list, field)
+  local out = {}
+  for _, x in ipairs(list or {}) do out[#out + 1] = type(x) == "table" and x[field or "name"] or x end
+  return #out > 0 and table.concat(out, ", ") or "none"
+end
+
+-- assign or unassign the viewer, keeping the other assignees
+local function toggle_self(repo, d, meta, assigned)
+  local ids = {}
+  local by = {}
+  for _, u in ipairs(meta.users) do by[u.login] = u.id end
+  for _, a in ipairs(d.assignees or {}) do
+    if a ~= meta.viewer and by[a] then ids[#ids + 1] = by[a] end
+  end
+  if not assigned then ids[#ids + 1] = by[meta.viewer] end
+  data.mutate(repo, update_query(d), { id = d.id, assigneeIds = ids }, update_path(d), function(err)
+    if not err then info((assigned and "unassigned you from " or "assigned you to ") .. label(d)) end
+  end)
+end
+
+function M.configure(repo, it)
+  if it.kind ~= "issue" and it.kind ~= "pr" then return warn("configure works on issues and pull requests") end
+  M.ensure(repo, it, function(d)
+    data.meta(repo, function(merr, meta)
+      meta = not merr and meta or nil
+      local issue, open = d.kind == "issue", d.state == "OPEN"
+      local items = {}
+      local function add(lbl, desc, fn) items[#items + 1] = { label = lbl, desc = desc, value = fn } end
+
+      add("Edit title and body", d.title, function() M.edit(repo, d) end)
+      add("Labels", names(d.labels), function() M.labels(repo, d) end)
+      add("Assignees", names(d.assignees), function() M.assignees(repo, d) end)
+      if meta and meta.viewer then
+        local assigned = vim.tbl_contains(d.assignees or {}, meta.viewer)
+        local assignable = false
+        for _, u in ipairs(meta.users) do assignable = assignable or u.login == meta.viewer end
+        if assigned or assignable then
+          add(assigned and "Unassign yourself" or "Assign yourself", "@" .. meta.viewer,
+            function() toggle_self(repo, d, meta, assigned) end)
+        end
+      end
+      if not issue then add("Reviewers", names(d.reviewers), function() M.reviewers(repo, d) end) end
+      add("Milestone", d.milestone or "none", function() M.milestone(repo, d) end)
+      if issue and open then
+        add("Work on this issue", "branch " .. M.branch_name(d), function() M.start_branch(repo, d) end)
+        add("Close as completed", nil, function() M.close_issue(repo, d, "COMPLETED") end)
+        add("Close as not planned", nil, function() M.close_issue(repo, d, "NOT_PLANNED") end)
+      elseif not issue and open then
+        add("Check out", d.head, function() M.checkout(repo, d) end)
+        add(d.draft and "Mark ready for review" or "Merge", nil, function() M.merge(repo, d) end)
+        add("Close", nil, function() M.toggle_state(repo, d) end)
+      elseif d.state == "CLOSED" then
+        add("Reopen", nil, function() M.reopen(repo, d) end)
+      end
+      add("Comment", nil, function() M.comment(repo, d) end)
+
+      pick.open({ title = "Configure · " .. label(d), items = items }, function(choice)
+        if choice then choice.value() end
       end)
     end)
   end)

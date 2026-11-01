@@ -67,6 +67,25 @@ function M.conflicts(cb)
   end)
 end
 
+-- has_branch(name, cb(exists)): a local branch called `name`
+function M.has_branch(name, cb)
+  M.run({ "rev-parse", "--verify", "--quiet", "refs/heads/" .. name }, function(err) cb(not err) end)
+end
+
+-- has_ref(ref, cb(exists)): any resolvable ref (e.g. origin/main)
+function M.has_ref(ref, cb)
+  M.run({ "rev-parse", "--verify", "--quiet", ref }, function(err) cb(not err) end)
+end
+
+-- create_branch(name, start, cb(err)): `git switch -c name start`, untracked
+-- so the first push sets the upstream (`new_pr` then sees "not on GitHub yet"
+-- instead of "N commits ahead of origin/main")
+function M.create_branch(name, start, cb)
+  local args = { "switch", "--no-track", "-c", name }
+  if start then args[#args + 1] = start end
+  M.run(args, function(err) cb(err) end)
+end
+
 function M.push(branch, cb)
   M.run({ "push", "-u", "origin", branch }, cb, 60000)
 end

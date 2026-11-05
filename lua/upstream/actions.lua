@@ -254,9 +254,30 @@ end
 
 local METHODS = { "MERGE", "SQUASH", "REBASE" }
 
+local function offer_resolve(repo, d)
+  local msg = ("%s has merge conflicts with %s and can't be merged.\nCheck it out and merge %s into it to resolve them locally?")
+    :format(label(d), d.base or "the base", d.base or "the base")
+  if confirm(msg, "&Resolve locally\n&Cancel", 2) == 1 then M.resolve_conflicts(repo, d) end
+end
+
+-- Mergeability can't come from the cache: it goes stale whenever either
+-- branch moves, and GitHub computes it lazily, answering UNKNOWN until the
+-- background check finishes. Re-fetch, and poll briefly while it's UNKNOWN.
+local function fresh_pr(repo, it, cb, tries)
+  tries = tries or 0
+  data.detail(repo, "pr", it.number, function(err, d)
+    if err or not (d and d.id) then return M.ensure(repo, it, cb) end
+    if d.state == "OPEN" and d.mergeable == "UNKNOWN" and tries < 4 then
+      if tries == 0 then info("checking mergeability of " .. label(d) .. "…") end
+      return vim.defer_fn(function() fresh_pr(repo, it, cb, tries + 1) end, 1500)
+    end
+    cb(d)
+  end, true)
+end
+
 function M.merge(repo, it)
   if it.kind ~= "pr" then return warn("only pull requests can be merged") end
-  M.ensure(repo, it, function(d)
+  fresh_pr(repo, it, function(d)
     if d.state ~= "OPEN" then
       if d.head_ref_id and not d.cross_repo then return M.delete_branch(repo, d) end
       return info(label(d) .. " is " .. d.state:lower())
@@ -267,12 +288,7 @@ function M.merge(repo, it)
       end
       return
     end
-    if d.mergeable == "CONFLICTING" then
-      local msg = ("%s has merge conflicts with %s and can't be merged.\nCheck it out and merge %s into it to resolve them locally?")
-        :format(label(d), d.base or "the base", d.base or "the base")
-      if confirm(msg, "&Resolve locally\n&Cancel", 2) == 1 then M.resolve_conflicts(repo, d) end
-      return
-    end
+    if d.mergeable == "CONFLICTING" then return offer_resolve(repo, d) end
     local extra = ""
     if d.checks == "FAILURE" or d.checks == "ERROR" then extra = " (checks are failing)" end
     if d.checks == "PENDING" then extra = " (checks are still running)" end
@@ -282,10 +298,15 @@ function M.merge(repo, it)
     if not method then return end
     data.mutate(repo, queries.merge_pr, { id = d.id, method = method }, { "mergePullRequest", "pullRequest" },
       function(err, merged)
-        if err or not merged then return end
+        -- mergeability can still flip between the check and the mutation
+        if err and (err:lower():find("conflict") or err:lower():find("not mergeable")) then
+          return offer_resolve(repo, d)
+        end
+        if err then return vim.notify("upstream: " .. err, vim.log.levels.ERROR) end
+        if not merged then return end
         info(("merged %s (%s)"):format(label(d), method:lower()))
         if merged.head_ref_id and not merged.cross_repo then M.delete_branch(repo, merged) end
-      end)
+      end, true)
   end)
 end
 

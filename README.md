@@ -108,6 +108,7 @@ require("upstream").setup({
   tab = "issues",      -- tab opened the first time
   compose = "current", -- where compose buffers open: current/split/vsplit/tab
   issue_branch = "{number}-{slug}", -- `w` branch: {number} {slug} {title}, or function(issue)
+  review = { wrap = true }, -- wrap long diff lines in the review tab
   highlights = {},     -- e.g. { UpstreamSel = { link = "Visual" } }
   keys = { ... },      -- see :help upstream-keys; false disables a key
   ai = {

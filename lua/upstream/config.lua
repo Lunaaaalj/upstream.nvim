@@ -16,6 +16,12 @@ M.defaults = {
   -- local branch for "work on this issue": a template ({number}, {slug},
   -- {title}) or function(issue) -> name
   issue_branch = "{number}-{slug}",
+  -- PR review tab
+  review = {
+    -- wrap long diff lines (prose / LaTeX); continuation rows are marked with
+    -- "↳" under the +/- column. false = scroll horizontally instead.
+    wrap = true,
+  },
   -- highlight overrides: { UpstreamTitle = { link = "Title" }, ... }
   highlights = {},
   -- float-local keys; set one to false to disable it

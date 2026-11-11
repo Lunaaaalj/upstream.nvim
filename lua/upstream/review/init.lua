@@ -24,6 +24,20 @@ local M = {}
 local ns = vim.api.nvim_create_namespace("upstream_review")
 local reviews = {} -- bufnr -> review state
 
+-- display width of the inline "%4s %4s " line-number gutter drawn before each
+-- diff line; wrapped rows are indented by the same amount (see apply_wrap)
+local GUTTER = 10
+local GUTTER_FMT = "%4s %4s "
+
+-- window-local wrap settings for the review window (config: review.wrap)
+local function apply_wrap(win)
+  local on = require("upstream.config").options.review.wrap and true or false
+  vim.wo[win].wrap = on
+  vim.wo[win].linebreak = on
+  vim.wo[win].breakindent = false
+  vim.wo[win].showbreak = on and ((" "):rep(GUTTER) .. "↳") or ""
+end
+
 local function ago(iso) return require("upstream.ui.detail").ago(iso) end
 local function err_notify(e) vim.notify("upstream: " .. e, vim.log.levels.ERROR) end
 local function info(msg) vim.notify("upstream: " .. msg, vim.log.levels.INFO) end
@@ -202,7 +216,7 @@ local function render(R)
           old = l.old, new = l.new,
         }, {
           line_hl = l.kind == "+" and "UpstreamDiffAdd" or l.kind == "-" and "UpstreamDiffDelete" or nil,
-          nr = ("%4s %4s "):format(l.old or "", l.new or ""),
+          nr = GUTTER_FMT:format(l.old or "", l.new or ""),
         })
         anchors[akey(f.path, side, ln)] = #lines
         if l.kind == " " then anchors[akey(f.path, "LEFT", l.old)] = #lines end
@@ -694,6 +708,7 @@ function M.open(repo, number, opts)
         vim.cmd.tabnew()
         vim.api.nvim_win_set_buf(0, b)
         R.win = vim.api.nvim_get_current_win()
+        apply_wrap(R.win)
       end
       if opts.assist then M.assist(R) end
       return
@@ -708,7 +723,7 @@ function M.open(repo, number, opts)
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "upstream_review"
   local win = vim.api.nvim_get_current_win()
-  vim.wo[win].wrap = false
+  apply_wrap(win)
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
   vim.wo[win].signcolumn = "no"

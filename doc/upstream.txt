@@ -168,6 +168,10 @@ the existing review threads drawn as virtual lines under their line.
 Resolved threads are collapsed to one line; outdated threads aren't anchored
 and are listed by `T`.
 
+Long lines wrap at word boundaries (handy for LaTeX and prose); continuation
+rows are marked with `↳` under the `+`/`-` column. Set `review.wrap = false`
+to scroll horizontally instead (|upstream-config|).
+
 Your comments go into a pending review (started on the first comment) and
 are only published when you submit it.
 
@@ -256,6 +260,9 @@ more"). The detail pane shows the run's jobs and steps.
       issue_branch = "{number}-{slug}", -- branch for `w`: a template
                            -- ({number}, {slug}, {title}) or
                            -- function(issue) -> name
+      review = {
+        wrap = true,       -- wrap long diff lines in the review tab
+      },
       highlights = {},     -- { GroupName = hl-spec } (|nvim_set_hl()|)
       keys = {             -- set a key to false to disable it
         next_tab = "<Tab>", prev_tab = "<S-Tab>", filter = "/",
